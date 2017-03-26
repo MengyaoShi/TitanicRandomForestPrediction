@@ -1,0 +1,212 @@
+---
+title: "Titanic"
+author: "Mengyao Shi"
+date: "March 22, 2017"
+output: ioslides_presentation
+---
+
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(plotly)
+library(dplyr)
+train<-read.csv('train.csv',stringsAsFactors = F)
+test<-read.csv('test.csv',stringsAsFactors = F)
+full<- bind_rows(train, test) 
+```
+
+```{r, echo=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(dplyr)
+library(ggplot2)
+library('ggthemes')
+library(caret)
+library(randomForest)
+library(ElemStatLearn)
+library('mice')
+full$Title<-gsub('(.*, )|(\\..*)', '', full$Name)
+other_title<-c('Capt','Col', 'Don', 'Dr','Jonkheer','Lady','Major','Rev','Sir','the Countess')
+full$Title[full$Title == "Mlle"]<-'Miss'
+full$Title[full$Title == 'Mme']<-'Mrs'
+full$Title[full$Title == 'Ms']<-'Miss'
+full$Title[full$Title %in% other_title]<-'Other Titles'
+full$Surname <- sapply(full$Name,  function(x) strsplit(x, split = '[,.]')[[1]][1])
+full$FSize<-full$SibSp+full$Parch+1
+full$FullFamily<-paste(full$Surname, full$FSize, sep='_')
+full$surviveRatio<-full$Survived
+
+
+
+##missing value full[1044,] fare
+
+full$Fare[1044] <- median(full[full$Pclass == '3' & full$Embarked == 'S', ]$Fare, na.rm = TRUE)
+##missing value age
+factor_vars <- c('PassengerId','Pclass','Sex','Embarked',
+                 'Title','Surname','FullFamily','FSize')
+
+full[factor_vars] <- lapply(full[factor_vars], function(x) as.factor(x))
+set.seed(129)
+
+miceOutput<-mice(full[!names(full) %in% c('PassengerId','Name','Ticket','Cabin','FullFamily','Surname','Survived','surviveRatio')],method='rf') %>%
+  complete() 
+full$Age <- miceOutput$Age
+
+##finished
+train<-full[1:891,]
+test<-full[892:1309,]
+comp_train<-train[complete.cases(train),]
+
+
+split_By_Survive<-split(comp_train, comp_train$Survived)
+Split_By_Sex<-split(comp_train, comp_train$Sex)
+Split_By_Class<-split(comp_train,comp_train$Pclass)
+
+factor_vars <- c('PassengerId','Pclass','Sex','Embarked',
+                 'Title','Surname','FullFamily','FSize')
+
+comp_train[factor_vars] <- lapply(comp_train[factor_vars], function(x) as.factor(x))
+
+inTrain<-createDataPartition(y=comp_train$Survived,p=0.6,list=FALSE)
+training<-comp_train[inTrain,]
+validation<-comp_train[-inTrain,]
+
+set.seed(876)
+modelFit<-randomForest(factor(Survived)~Pclass+Sex+Age+SibSp+Parch+Fare+Embarked+Title+FSize,data=training)
+
+```
+
+
+
+```{r,echo=FALSE}
+# Get importance
+importance    <- importance(modelFit)
+varImportance <- data.frame(Variables = row.names(importance), 
+                            Importance = round(importance[ ,'MeanDecreaseGini'],2))
+
+# Create a rank variable based on importance
+rankImportance <- varImportance %>%
+  mutate(Rank = paste0('#',dense_rank(desc(Importance))))
+
+rankImportance<- rankImportance[with(rankImportance, order(-rankImportance$Importance)),]
+# Use ggplot2 to visualize the relative importance of variables
+```
+
+
+## 891 people Survived and Dead statistics
+### zero being dead and one means survived
+```{r}
+library(plotly)
+plot_ly(comp_train, x=~Survived, type='histogram')
+```
+
+## First Class Passenger and Survival
+```{r, echo=FALSE, message=FALSE}
+library(plotly)
+Class_3<-c("First Class", "Second Class", "Third Class")
+plot_ly(Split_By_Class$`1`, x=~Survived, type='histogram')
+
+
+
+```
+
+## Second Class Passenger and Survival
+```{r, echo=FALSE, message=FALSE}
+library(plotly)
+plot_ly(Split_By_Class$`2`, x=~Survived, type='histogram')
+```
+
+## Third Class Passenger and Survival
+```{r, echo=FALSE, message=FALSE}
+library(plotly)
+plot_ly(Split_By_Class$`3`, x=~Survived, type='histogram')
+```
+
+## Ticket Fare
+```{r}
+library(plotly)
+plot_ly(alpha=0.6) %>%
+  add_histogram(x=split_By_Survive$`0`$Fare, type='histogram', name='Dead') %>%
+  add_histogram(x=split_By_Survive$`1`$Fare, type='histogram', name='survived') %>%
+  layout(barmode="stack", xaxis=list(title='Fare in USD'))
+
+```
+
+## Age and Survival
+### Notice orange(survived) and blue(all) use a bit different binning 
+```{r, message=FALSE}
+library(plotly)
+
+plot_ly(alpha = 0.6) %>%
+  add_histogram(x=comp_train$Age, type="histogram", name='all') %>%
+  add_histogram(x=split_By_Survive$`1`$Age, type="histogram", name='survived') %>%
+  layout(barmode = "overlay", xaxis=list(title='Fare in USD'))
+
+```
+
+## Female and Survival
+```{r, echo=FALSE, message=FALSE}
+library(plotly)
+Split_By_Sex<-split(comp_train, comp_train$Sex)
+plot_ly(Split_By_Sex$female, x=~Survived, type='histogram')
+```
+
+## male Survival
+```{r, echo=FALSE, message=FALSE}
+library(plotly)
+Split_By_Sex<-split(comp_train, comp_train$Sex)
+plot_ly(Split_By_Sex$male, x=~Survived, type='histogram')
+```
+
+
+
+```{r}
+
+modelFit<-randomForest(factor(Survived)~Pclass+Sex+Age+Fare+Title+FSize,data=training, ntree=40)
+result_train<-predict(modelFit,training)
+result_predict<-predict(modelFit,validation)
+validation[,(ncol(validation)+1)]<-result_predict
+
+
+```
+## Relative importance of key features 
+### Live or death? These are key factors that determin(this is not an interactive plot)
+```{r}
+# Use ggplot2 to visualize the relative importance of variables
+ggplot(rankImportance, aes(x = reorder(Variables, Importance), 
+    y = Importance, fill = Importance)) +
+  geom_bar(stat='identity') + 
+  geom_text(aes(x = Variables, y = 0.5, label = Rank),
+    hjust=0, vjust=0.55, size = 4, colour = 'red') +
+  labs(x = 'Variables') +
+  coord_flip() + 
+  theme_few()
+
+```
+
+
+
+```{r}
+modelFit<-randomForest(factor(Survived)~Pclass+Sex+Age+Fare+Title+FSize,data=comp_train, ntree=40)
+result_train<-predict(modelFit,comp_train)
+prediction<-predict(modelFit,test)
+# Save the solution to a dataframe with two columns: PassengerId and Survived (prediction)
+solution <- data.frame(PassengerID = test$PassengerId, Survived = prediction)
+
+# Write the solution to file
+write.csv(solution, file = 'rf_Solution.csv', row.names = F)
+
+```
+
+
+## Random Forest prediction result(not an interactive plot)
+
+```{r}
+library(plotly)
+plot(modelFit, ylim=c(0,0.36))
+legend('topright', colnames(modelFit$err.rate), col=1:3, fill=1:3)
+```
+
+## Thank you
+### Reference 
+#### https://www.kaggle.com/c/titanic/data
+#### https://www.kaggle.com/mrisdal/titanic/exploring-survival-on-the-titanic
